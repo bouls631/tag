@@ -45,7 +45,7 @@
 <section>
   <h2>3. Résumé à copier</h2>
   <textarea id="out" readonly spellcheck="false"></textarea>
-  <p><button id="copy">Copier le résumé</button></p>
+  <p><button id="copy">Copier le résumé</button> <button id="reset">Tout effacer</button></p>
 </section>
 
 <script>
@@ -63,6 +63,16 @@ const KNOWN_KEYS = [
 ];
 const $ = id => document.getElementById(id);
 const S = { sources: [], sectors: {} };
+const STATE_KEYS = ['sources', 'sectors', 'uid', 'maker', 'chip', 'product', 'originality', 'produced', 'reused', 'atqa', 'sak'];
+try {
+  const saved = JSON.parse(localStorage.getItem('badgeState') || 'null');
+  if (saved) STATE_KEYS.forEach(k => { if (saved[k]) S[k] = saved[k]; });
+} catch (e) {}
+function saveState() {
+  const out = {};
+  STATE_KEYS.forEach(k => { if (S[k]) out[k] = S[k]; });
+  try { localStorage.setItem('badgeState', JSON.stringify(out)); } catch (e) {}
+}
 
 function set(key, value) {
   if (value && !S[key]) S[key] = value;
@@ -113,7 +123,11 @@ function parseTagXml(text) {
   if (!S.sources.includes('TagInfo XML')) S.sources.push('TagInfo XML');
   const u = doc.querySelector('uid');
   if (u) set('uid', cleanHex(u.textContent));
-  parseInfo([...doc.querySelectorAll('block[type="text"] content')].map(e => e.textContent).join('\n'));
+  parseInfo([...doc.querySelectorAll('subsection')].map(sec => {
+    const title = sec.getAttribute('title') || '';
+    const c = sec.querySelector('content');
+    return c ? title + ': ' + c.textContent : '';
+  }).join('\n'));
   for (const bl of doc.querySelectorAll('block[type="MifareData"], block[type="MifareTrailer"]')) {
     const a = bl.querySelector('address');
     const d = bl.querySelector('data');
@@ -130,6 +144,7 @@ async function loadFiles(files) {
     else $('status').textContent += 'Fichier non reconnu : ' + f.name + '. ';
   }
   $('status').textContent += 'Fichiers lus : ' + S.sources.join(', ') || 'aucun';
+  saveState();
   fillManualFromParsed();
   render();
 }
@@ -199,6 +214,14 @@ function render() {
 }
 $('files').addEventListener('change', e => loadFiles(e.target.files));
 ['uid','s5b0','s5ka','s5kb','printed'].forEach(id => $(id).addEventListener('input', render));
+$('reset').addEventListener('click', () => {
+  try { localStorage.removeItem('badgeState'); } catch (e) {}
+  Object.keys(S).forEach(k => delete S[k]);
+  S.sources = []; S.sectors = {};
+  ['uid','s5b0','s5ka','s5kb','printed'].forEach(id => $(id).value = '');
+  $('status').textContent = '';
+  render();
+});
 $('copy').addEventListener('click', async () => {
   const t = $('out');
   try { await navigator.clipboard.writeText(t.value); }
@@ -216,6 +239,7 @@ async function loadShared() {
     else if (parseMct(text)) {}
     else if (parseTagTxt(text)) {}
     $('status').textContent = 'Fichier partagé importé automatiquement.';
+    saveState();
     fillManualFromParsed();
     render();
     await c.delete('/shared-file');
