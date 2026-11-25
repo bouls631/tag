@@ -7,9 +7,13 @@ Petite PWA pour réunir les infos d'un badge MIFARE Classic à partir des fichie
 
 Elle produit un résumé copiable (UID, type de puce, originalité, date de fabrication, secteur 5, clés connues, numéro imprimé décomposé en hex).
 
+## Import automatique (Web Share Target)
+
+L'appli est enregistrée comme cible de partage. Depuis **Mifare Classic Tool** ou **TagInfo**, utilise « Partager » sur le dump / le scan et choisis **Badge Info** : l'appli s'ouvre, parse le fichier et affiche le résumé sans manipulation supplémentaire.
+
 ## Limite
 
-Le Web NFC des navigateurs ne lit que le NDEF. Cette appli ne lit donc **pas** les secteurs MIFARE Classic avec clés : elle importe les fichiers générés par MCT / TagInfo. Le badge analysé ne contient pas de NDEF.
+Le Web NFC des navigateurs ne lit que le NDEF (MDN : *low-level operations are currently not supported*). Cette appli ne lit donc **pas** les secteurs MIFARE Classic avec clés : elle importe les fichiers générés par MCT / TagInfo. Le badge analysé ne contient pas de NDEF. Pour une lecture automatique au contact de la carte, il faut une appli native Android (`android.nfc.tech.MifareClassic`), pas une PWA.
 
 ## Installation
 

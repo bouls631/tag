@@ -135,7 +135,10 @@ async function loadFiles(files) {
 }
 function fillManualFromParsed() {
   const s5 = S.sectors[5] || [];
-  if (!$('uid').value && S.uid) $('uid').value = S.uid;
+  if (!$('uid').value) {
+    if (S.uid) $('uid').value = S.uid;
+    else if (S.sectors[0] && S.sectors[0][0]) $('uid').value = S.sectors[0][0].slice(0, 8);
+  }
   if (!$('s5b0').value && s5[0]) $('s5b0').value = s5[0];
   if (!$('s5ka').value && s5[3]) $('s5ka').value = s5[3].slice(0, 12);
   if (!$('s5kb').value && s5[3]) $('s5kb').value = s5[3].slice(20, 32);
@@ -203,6 +206,24 @@ $('copy').addEventListener('click', async () => {
   $('copy').textContent = 'Copié ✓';
   setTimeout(() => $('copy').textContent = 'Copier le résumé', 1500);
 });
+async function loadShared() {
+  try {
+    const c = await caches.open('badge-info-share');
+    const r = await c.match('/shared-file');
+    if (!r) return;
+    const text = await r.text();
+    if (text.includes('<scan')) parseTagXml(text);
+    else if (parseMct(text)) {}
+    else if (parseTagTxt(text)) {}
+    $('status').textContent = 'Fichier partagé importé automatiquement.';
+    fillManualFromParsed();
+    render();
+    await c.delete('/shared-file');
+  } catch (e) {
+    $('status').textContent = 'Import automatique impossible : ' + e.message;
+  }
+}
+if (location.search.includes('shared=1')) loadShared();
 render();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
