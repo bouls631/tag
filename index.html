@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Badge Info — collecte</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0b3d5c">
+<style>
+  :root { font-family: system-ui, sans-serif; color: #16212b; }
+  body { margin: 0 auto; max-width: 760px; padding: 16px; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; color: #0b3d5c; }
+  h2 { font-size: 1.05rem; margin: 0 0 8px; }
+  p.intro { margin: 0 0 16px; color: #4a5b68; font-size: .92rem; }
+  section { background: #f4f7f9; border: 1px solid #d8e2e8; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+  label { display: block; font-size: .85rem; margin: 8px 0; }
+  input[type=text] { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #b9c8d2; border-radius: 6px; font-family: monospace; }
+  input[type=file] { max-width: 100%; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 300px; font-family: ui-monospace, monospace; font-size: .82rem; padding: 10px; border: 1px solid #b9c8d2; border-radius: 6px; }
+  button { background: #0b3d5c; color: #fff; border: 0; border-radius: 6px; padding: 10px 16px; font-size: .95rem; cursor: pointer; }
+  button:active { background: #092f47; }
+  #status { font-size: .85rem; color: #256b3a; min-height: 1.2em; }
+  code { background: #e6edf1; padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>Badge Info</h1>
+<p class="intro">Importe tes dumps <b>Mifare Classic Tool</b> et tes scans <b>TagInfo</b> (.txt/.xml), ou saisis les champs à la main. Le résumé ci-dessous contient exactement les infos utiles : copie-le et envoie-le moi.</p>
+
+<section>
+  <h2>1. Fichiers</h2>
+  <input type="file" id="files" multiple accept=".txt,.xml,.mct,.nfc,*/*">
+  <div id="status"></div>
+</section>
+
+<section>
+  <h2>2. Saisie manuelle (si tu n'as pas les fichiers sous la main)</h2>
+  <label>UID <input type="text" id="uid" placeholder="1D:89:84:59"></label>
+  <label>Bloc 0 du secteur 5 <input type="text" id="s5b0" placeholder="32667764000000000000000000000000"></label>
+  <label>Clé A du secteur 5 <input type="text" id="s5ka" placeholder="9EB7C8A6D4E3"></label>
+  <label>Clé B du secteur 5 <input type="text" id="s5kb" placeholder="FFFFFFFFFFFF"></label>
+  <label>Numéro imprimé sur le badge <input type="text" id="printed" placeholder="1561-05262"></label>
+</section>
+
+<section>
+  <h2>3. Résumé à copier</h2>
+  <textarea id="out" readonly spellcheck="false"></textarea>
+  <p><button id="copy">Copier le résumé</button></p>
+</section>
+
+<script>
+'use strict';
+const KNOWN_KEYS = [
+  'FFFFFFFFFFFF','000000000000','A0A1A2A3A4A5','A5A4A3A2A1A0',
+  '314B49474956','564C505F4D41','BA5B895DA162',
+  '0000A2B3C86F','021200C20307','021209197507','1E34B127AF9C',
+  '303041534956','4143532D494E','41454E521985','43412D627400',
+  '455249524345','456666456666','45B722C63319','484585414354',
+  '4D414C414741','536563644C65','57D27B730760','593DD8FE167A',
+  '6472616E7265','65626F726369','680E95F3C287','709BA7D4F920',
+  '8829DAD9AF76','92D0A0999CBA','948EE7CFC9DB','9EB7C8A6D4E3',
+  'A22AE12C9013','AFC984A3576E'
+];
+const $ = id => document.getElementById(id);
+const S = { sources: [], sectors: {} };
+
+function set(key, value) {
+  if (value && !S[key]) S[key] = value;
+}
+function cleanHex(v) { return (v || '').replace(/[^0-9A-Fa-f]/g, '').toUpperCase(); }
+function putBlock(addr, hex) {
+  if (hex.length !== 32) return;
+  const s = addr >> 2, i = addr & 3;
+  (S.sectors[s] = S.sectors[s] || [])[i] = hex;
+}
+function parseInfo(text) {
+  let m;
+  if ((m = text.match(/IC Type:\s*([^\r\n<]+)/))) set('chip', m[1].trim());
+  if ((m = text.match(/IC Manufacturer:\s*([^\r\n<]+)/))) set('maker', m[1].trim());
+  if ((m = text.match(/Full product name:\s*([^\r\n<]+)/))) set('product', m[1].trim());
+  if ((m = text.match(/Production date:\s*([^\r\n<]+)/))) set('produced', m[1].trim());
+  if (/Signature verified/i.test(text)) set('originality', 'vérifiée avec la clé publique NXP');
+  if (/Re-used \(Old\) Non-Unique ID/i.test(text)) set('reused', 'oui (UID réutilisé / carte réattribuée)');
+  if ((m = text.match(/ATQA:\s*(0x[0-9A-Fa-f]+)/))) set('atqa', m[1].toUpperCase());
+  const saks = [...text.matchAll(/SAK:\s*(0x[0-9A-Fa-f]+)/g)];
+  if (saks.length) S.sak = saks[saks.length - 1][1].toUpperCase();
+  if ((m = text.match(/UID:\s*([0-9A-F:]{11,23})/i))) set('uid', cleanHex(m[1]));
+}
+function parseMct(text) {
+  let cur = null, found = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    const m = line.match(/^\+Sector:\s*(\d+)/i);
+    if (m) { cur = +m[1]; found = true; continue; }
+    if (cur !== null && /^[0-9A-F]{32}$/i.test(line)) putBlock(cur * 4 + (S.sectors[cur] || []).length, line);
+  }
+  if (found && !S.sources.includes('MCT dump')) S.sources.push('MCT dump');
+  return found;
+}
+function parseTagTxt(text) {
+  if (!/TagInfo Scan/i.test(text)) return false;
+  if (!S.sources.includes('TagInfo TXT')) S.sources.push('TagInfo TXT');
+  parseInfo(text);
+  for (const line of text.split(/\r?\n/)) {
+    const b = line.match(/^\s*\[([0-9A-F]{2})\]\s+(\S+)\s+(.+)$/i);
+    if (b) putBlock(parseInt(b[1], 16), cleanHex(b[3]).slice(0, 32));
+  }
+  return true;
+}
+function parseTagXml(text) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.querySelector('parsererror') || !doc.querySelector('scan')) return false;
+  if (!S.sources.includes('TagInfo XML')) S.sources.push('TagInfo XML');
+  const u = doc.querySelector('uid');
+  if (u) set('uid', cleanHex(u.textContent));
+  parseInfo([...doc.querySelectorAll('block[type="text"] content')].map(e => e.textContent).join('\n'));
+  for (const bl of doc.querySelectorAll('block[type="MifareData"], block[type="MifareTrailer"]')) {
+    const a = bl.querySelector('address');
+    const d = bl.querySelector('data');
+    if (a && d) putBlock(parseInt(a.textContent, 10), cleanHex(d.textContent).slice(0, 32));
+  }
+  return true;
+}
+async function loadFiles(files) {
+  for (const f of files) {
+    const text = await f.text();
+    if (text.includes('<scan')) parseTagXml(text);
+    else if (parseMct(text)) {}
+    else if (parseTagTxt(text)) {}
+    else $('status').textContent += 'Fichier non reconnu : ' + f.name + '. ';
+  }
+  $('status').textContent += 'Fichiers lus : ' + S.sources.join(', ') || 'aucun';
+  fillManualFromParsed();
+  render();
+}
+function fillManualFromParsed() {
+  const s5 = S.sectors[5] || [];
+  if (!$('uid').value && S.uid) $('uid').value = S.uid;
+  if (!$('s5b0').value && s5[0]) $('s5b0').value = s5[0];
+  if (!$('s5ka').value && s5[3]) $('s5ka').value = s5[3].slice(0, 12);
+  if (!$('s5kb').value && s5[3]) $('s5kb').value = s5[3].slice(20, 32);
+}
+function decode4(hex8) {
+  if (!/^[0-9A-F]{8}$/.test(hex8)) return '';
+  const b = hex8.match(/../g);
+  const be = parseInt(hex8, 16);
+  const le = parseInt(b.slice().reverse().join(''), 16);
+  const ascii = b.map(x => String.fromCharCode(parseInt(x, 16))).join('');
+  let date = '';
+  if (le >= 946684800 && le <= 2147483647) date = new Date(le * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  return `ASCII « ${ascii} » | BE ${be} | LE ${le}${date ? ' → ' + date : ''}`;
+}
+function filledBlocks() {
+  const out = [];
+  for (const s of Object.keys(S.sectors).sort((a, b) => a - b)) {
+    (S.sectors[s] || []).forEach((v, i) => {
+      if (v && /[1-9A-F]/.test(v)) out.push('S' + s + 'B' + i);
+    });
+  }
+  return out.join(', ') || 'aucun';
+}
+function render() {
+  const b0 = cleanHex($('s5b0').value).slice(0, 32);
+  const ka = cleanHex($('s5ka').value).slice(0, 12);
+  const kb = cleanHex($('s5kb').value).slice(0, 12);
+  const uid = cleanHex($('uid').value);
+  const printed = $('printed').value.trim();
+  const digits = printed.replace(/\D/g, '');
+  let numLine = printed || '(non renseigné)';
+  if (digits.length >= 5) {
+    const n = Number(digits.slice(-9));
+    const hi = Math.floor(n / 100000), lo = n % 100000;
+    numLine += ` → 0x${(hi * 65536 + lo).toString(16).toUpperCase().padStart(8, '0')} (${hi}<<16 | ${lo})`;
+  }
+  const lines = [
+    'BADGE — résumé pour analyse',
+    'Sources : ' + (S.sources.join(' + ') || 'saisie manuelle'),
+    'UID : ' + (uid || '(inconnu)'),
+    'Puce : ' + ([S.maker, S.chip, S.product].filter(Boolean).join(' — ') || '(inconnue)'),
+    'Originalité : ' + (S.originality || 'non vérifiée'),
+    'Fabrication : ' + (S.produced || 'inconnue'),
+    'UID réutilisé : ' + (S.reused || 'inconnu'),
+    'ATQA : ' + (S.atqa || '?').replace('0X', '0x') + ' | SAK : ' + (S.sak || '?').replace('0X', '0x'),
+    '',
+    'Numéro imprimé : ' + numLine,
+    '',
+    'Secteur 5 — bloc 0 (0x14) : ' + (b0 || '(non renseigné)'),
+    '  ' + (decode4(b0.slice(0, 8)) || '(à renseigner : 4 premiers octets)'),
+    'Secteur 5 — trailer (0x17) :',
+    '  Key A : ' + (ka || '?') + (KNOWN_KEYS.includes(ka) ? '  [CLÉ CONNUE / dictionnaire public]' : '  [clé non répertoriée]'),
+    '  Key B : ' + (kb || '?') + (KNOWN_KEYS.includes(kb) ? '  [CLÉ CONNUE / dictionnaire public]' : ''),
+    '',
+    'Blocs non nuls : ' + filledBlocks()
+  ];
+  $('out').value = lines.join('\n');
+}
+$('files').addEventListener('change', e => loadFiles(e.target.files));
+['uid','s5b0','s5ka','s5kb','printed'].forEach(id => $(id).addEventListener('input', render));
+$('copy').addEventListener('click', async () => {
+  const t = $('out');
+  try { await navigator.clipboard.writeText(t.value); }
+  catch (e) { t.select(); document.execCommand('copy'); }
+  $('copy').textContent = 'Copié ✓';
+  setTimeout(() => $('copy').textContent = 'Copier le résumé', 1500);
+});
+render();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
